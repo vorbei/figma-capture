@@ -4,9 +4,9 @@ Chrome extension to capture any webpage into a Figma file, bypassing CSP restric
 
 ## Setup
 
-1. Download `capture.js` into this directory:
+1. Build (downloads `capture.js` from Figma):
    ```
-   curl -o capture.js 'https://mcp.figma.com/mcp/html-to-design/capture.js'
+   make
    ```
 2. Go to `chrome://extensions`, enable Developer mode
 3. Click "Load unpacked" and select this directory
