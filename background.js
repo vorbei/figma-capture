@@ -1,134 +1,344 @@
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.action === 'capture') {
-    handleCapture(msg.fileKey, msg.selector || 'body').then(
-      () => sendResponse({ ok: true }),
-      (e) => sendResponse({ error: e.message })
-    );
-    return true;
-  }
-});
-
-// CJK 字体预处理：动态检测系统实际渲染的 CJK 字体，替换到 DOM 上
-function preprocessCJKFonts(selector) {
-  const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/;
-
-  // 用 canvas 探测系统可用的 CJK 字体
-  const CANDIDATES = [
-    'PingFang SC', 'PingFang TC',
-    'Hiragino Sans GB', 'Hiragino Sans',
-    'Microsoft YaHei', 'SimHei', 'SimSun',
-    'Noto Sans SC', 'Noto Sans TC',
-    'Source Han Sans SC', 'Source Han Sans CN',
-    'WenQuanYi Micro Hei',
-    'Apple SD Gothic Neo',         // Korean macOS
-    'Malgun Gothic',               // Korean Windows
-    'Meiryo', 'Yu Gothic',         // Japanese Windows
-  ];
-  const KNOWN_RE = new RegExp(CANDIDATES.map(f => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i');
-
-  function detectCJKFont() {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    const testChar = '永';
-    const size = '72px';
-
-    // baseline: monospace 渲染宽度
-    ctx.font = `${size} monospace`;
-    const baseW = ctx.measureText(testChar).width;
-
-    for (const font of CANDIDATES) {
-      ctx.font = `${size} "${font}", monospace`;
-      if (ctx.measureText(testChar).width !== baseW) return font;
-    }
-    return null;
-  }
-
-  const systemCJK = detectCJKFont();
-  if (!systemCJK) return; // 没检测到任何 CJK 字体
-
-  console.log('[figma-capture] detected CJK font:', systemCJK);
-
-  const root = document.querySelector(selector) || document.body;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const processed = new Set();
-
-  while (walker.nextNode()) {
-    const textNode = walker.currentNode;
-    if (!CJK_RE.test(textNode.textContent)) continue;
-
-    const el = textNode.parentElement;
-    if (!el || processed.has(el)) continue;
-    processed.add(el);
-
-    const families = getComputedStyle(el).fontFamily;
-
-    // 已经包含明确的 CJK 字体名，跳过
-    if (KNOWN_RE.test(families)) continue;
-
-    // 在原有字体栈前插入检测到的系统 CJK 字体
-    el.style.fontFamily = `"${systemCJK}", ${families}`;
-  }
-}
-
-async function handleCapture(fileKey, selector) {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) throw new Error('No active tab');
-
-  // 1. 获取 captureId
-  let captureId;
-  try {
-    const res = await fetch('https://mcp.figma.com/mcp/capture', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileKey })
-    });
-    const data = await res.json();
-    captureId = data.captureId || data.id;
-  } catch (e) {
-    console.error('Failed to get captureId:', e);
-  }
-
-  if (!captureId) {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => prompt('Auto captureId failed. Paste one manually:'),
-      world: 'MAIN'
-    });
-    captureId = results?.[0]?.result;
-    if (!captureId) throw new Error('No captureId');
-  }
-
-  const endpoint = `https://mcp.figma.com/mcp/capture/${captureId}/submit`;
-  console.log('captureId:', captureId, 'selector:', selector);
-
-  // 2. 预处理 CJK 字体
+// 点击图标 → 注入拦截器 + capture.js → 自动剪贴板捕获（不发送）
+chrome.action.onClicked.addListener(async (tab) => {
+  // 1. 注入拦截器（修改剪贴板 payload 的字体+扁平化）
   await chrome.scripting.executeScript({
     target: { tabId: tab.id },
-    args: [selector],
-    func: preprocessCJKFonts,
+    func: installFontInterceptor,
     world: 'MAIN'
   });
-
-  // 3. 注入 capture.js
+  // 2. 注入 capture.js
   await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     files: ['capture.js'],
     world: 'MAIN'
   });
+  // 3. 触发剪贴板捕获（不传 endpoint → 只复制不发送）
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: () => {
+      window.figma.captureForDesign({ selector: 'body' });
+    },
+    world: 'MAIN'
+  });
+});
 
-  // 4. 触发捕获
-  setTimeout(() => {
-    chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      args: [captureId, endpoint, selector],
-      func: (id, ep, sel) => {
-        window.figma.captureForDesign({
-          captureId: id,
-          endpoint: ep,
-          selector: sel
-        });
-      },
-      world: 'MAIN'
-    });
-  }, 1500);
+// 拦截 fetch，修改发给 Figma 的 payload（字体修正 + DOM 扁平化，不改网页）
+function installFontInterceptor() {
+  const SYSTEM_ALIASES = new Set([
+    '-apple-system', 'BlinkMacSystemFont', 'system-ui',
+    'Segoe UI', 'Roboto', 'Helvetica Neue', 'Helvetica', 'Arial',
+    'sans-serif', 'serif', 'monospace', 'cursive', 'fantasy',
+  ]);
+  const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/;
+  const ICON_RE = /Material|Symbol|Icon|FontAwesome|fa-/i;
+  const SERIF_FONTS = new Set([
+    'Georgia', 'Times New Roman', 'Times', 'Palatino', 'Palatino Linotype',
+    'Garamond', 'Bookman', 'Book Antiqua', 'Cambria', 'Didot',
+  ]);
+  const PASSTHROUGH_TAGS = new Set([
+    'DIV', 'SPAN', 'SECTION', 'ARTICLE', 'MAIN', 'ASIDE', 'HEADER', 'FOOTER', 'NAV',
+  ]);
+
+  // --- Helpers ---
+
+  function collectText(node) {
+    if (!node || typeof node !== 'object') return '';
+    if (node.nodeType === 3) return node.text || '';
+    if (node.nodeType === 1 && Array.isArray(node.childNodes)) {
+      return node.childNodes.map(collectText).join('');
+    }
+    return '';
+  }
+
+  // --- Font fix ---
+  // CJK + serif → Noto Serif SC, CJK + sans-serif → PingFang SC
+  // Icon fonts (Material Symbols) → keep icon font, append CJK fallback
+
+  function isSerif(ff) {
+    const list = ff.split(',').map(f => f.trim().replace(/^["']|["']$/g, ''));
+    return list.some(f => SERIF_FONTS.has(f) || f === 'serif');
+  }
+
+  function cjkFont(ff) {
+    return isSerif(ff) ? 'Noto Serif SC' : 'PingFang SC';
+  }
+
+  function fixFont(node) {
+    if (!node || typeof node !== 'object') return;
+    if (node.nodeType === 3) return;
+
+    if (node.nodeType === 1) {
+      if (Array.isArray(node.childNodes)) {
+        node.childNodes.forEach(fixFont);
+      }
+
+      const ff = node.styles?.fontFamily;
+      if (!ff) return;
+
+      // Already has CJK font
+      if (/PingFang|Noto (Sans|Serif) SC/i.test(ff)) return;
+
+      // Icon font: keep it, but append CJK fallback for adjacent text
+      if (ICON_RE.test(ff)) {
+        const text = collectText(node);
+        if (text && CJK_RE.test(text)) {
+          node.styles.fontFamily = ff + ', PingFang SC';
+        }
+        return;
+      }
+
+      const text = collectText(node);
+      if (text && CJK_RE.test(text)) {
+        if (!node.styles) node.styles = {};
+        node.styles.fontFamily = cjkFont(ff);
+      }
+    }
+  }
+
+  // --- Phase 3: Flatten pass-through wrappers (bottom-up) ---
+
+  const TRANSPARENT_RE = /transparent|rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0\s*\)/i;
+  const ZERO_BORDER_RE = /^0(px)?\b/;
+
+  function isVisibleBg(v) {
+    if (!v || v === '' || v === 'none' || v === '0') return false;
+    if (TRANSPARENT_RE.test(v)) return false;
+    return true;
+  }
+
+  function isVisibleBorder(v) {
+    if (!v || v === '' || v === 'none' || v === '0' || v === '0px') return false;
+    if (ZERO_BORDER_RE.test(v)) return false;       // "0px solid ..."
+    if (TRANSPARENT_RE.test(v)) return false;         // "1px solid transparent"
+    return true;
+  }
+
+  function hasDecoration(node) {
+    const s = node.styles || {};
+    // Background
+    if (isVisibleBg(s.backgroundColor) || isVisibleBg(s.background) || isVisibleBg(s.backgroundImage)) return true;
+    // Border (any side)
+    for (const key of ['border', 'borderTop', 'borderRight', 'borderBottom', 'borderLeft']) {
+      if (isVisibleBorder(s[key])) return true;
+    }
+    // Shadow, outline
+    for (const key of ['boxShadow', 'outline']) {
+      const v = s[key];
+      if (v && v !== '' && v !== 'none' && v !== '0') return true;
+    }
+    // Opacity
+    if (s.opacity && s.opacity !== '1') return true;
+    // Note: borderRadius alone is NOT decoration (invisible without bg/border)
+    // Note: overflow is handled in canFlatten with size check
+    return false;
+  }
+
+  const FLEX_KEYS = ['flex', 'flexGrow', 'flexShrink', 'flexBasis', 'order', 'alignSelf'];
+  const SIZE_TOLERANCE = 4; // px
+
+  function sizeMatch(parentRect, childRect) {
+    if (!parentRect || !childRect) return true;
+    const dw = Math.abs((parentRect.width || 0) - (childRect.width || 0));
+    const dh = Math.abs((parentRect.height || 0) - (childRect.height || 0));
+    return dw <= SIZE_TOLERANCE && dh <= SIZE_TOLERANCE;
+  }
+
+  function canFlatten(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (!PASSTHROUGH_TAGS.has((node.tag || '').toUpperCase())) return false;
+    if (hasDecoration(node)) return false;
+    const children = Array.isArray(node.childNodes) ? node.childNodes : [];
+    if (children.length !== 1) return false;
+    const child = children[0];
+    // overflow:hidden/clip only blocks when sizes differ
+    const s = node.styles || {};
+    const hasClip = s.overflow === 'hidden' || s.overflow === 'clip'
+      || s.overflowX === 'hidden' || s.overflowY === 'hidden';
+    if (hasClip && !sizeMatch(node.rect, child.rect)) return false;
+    // Text child → always flatten
+    if (child.nodeType === 3) return true;
+    // Element child → only if ~same size
+    return sizeMatch(node.rect, child.rect);
+  }
+
+  function promoteChild(wrapper, child) {
+    // Transfer flex/layout props from wrapper to child
+    const ws = wrapper.styles || {};
+    for (const key of FLEX_KEYS) {
+      if (ws[key] != null && ws[key] !== '') {
+        if (!child.styles) child.styles = {};
+        child.styles[key] = ws[key];
+      }
+    }
+    // Child keeps its own rect (absolute coords already correct)
+    return child;
+  }
+
+  function phase3Flatten(node) {
+    if (!node || typeof node !== 'object') return node;
+    if (node.nodeType === 3) return node;
+
+    if (node.nodeType === 1 && Array.isArray(node.childNodes)) {
+      // Recurse children first (bottom-up)
+      node.childNodes = node.childNodes.map(phase3Flatten);
+
+      // Flatten: promote single child of non-decorative same-size wrappers
+      const hasSiblings = node.childNodes.length > 1;
+      const newChildren = [];
+      let changed = false;
+      for (const child of node.childNodes) {
+        if (canFlatten(child)) {
+          const promoted = child.childNodes[0];
+          // Don't promote text nodes when wrapper has siblings
+          // (Figma merges adjacent text nodes)
+          if (promoted.nodeType === 3 && hasSiblings) {
+            newChildren.push(child);
+          } else {
+            newChildren.push(promoteChild(child, promoted));
+            changed = true;
+          }
+        } else {
+          newChildren.push(child);
+        }
+      }
+      if (changed) node.childNodes = newChildren;
+    }
+    return node;
+  }
+
+  // --- Phase: Strip whitespace-only text nodes & zero-size empty frames ---
+
+  function cleanupNodes(node) {
+    if (!node || typeof node !== 'object') return node;
+    if (node.nodeType === 3) return node;
+
+    if (node.nodeType === 1 && Array.isArray(node.childNodes)) {
+      // Recurse first
+      node.childNodes = node.childNodes.map(cleanupNodes).filter(Boolean);
+
+      // Remove whitespace-only text nodes
+      node.childNodes = node.childNodes.filter(child => {
+        if (child.nodeType === 3) {
+          const text = (child.text || '').trim();
+          if (!text) return false; // pure whitespace → remove
+        }
+        return true;
+      });
+
+      // Remove zero-size empty element nodes (no children, tiny rect)
+      node.childNodes = node.childNodes.filter(child => {
+        if (child.nodeType === 1) {
+          const r = child.rect;
+          const hasChildren = Array.isArray(child.childNodes) && child.childNodes.length > 0;
+          if (!hasChildren && r && r.width < 1 && r.height < 1) return false;
+          if (!hasChildren && r && (r.height < 0.01)) return false;
+        }
+        return true;
+      });
+    }
+    return node;
+  }
+
+  // --- Transform pipeline ---
+
+  function transformPayload(root) {
+    fixFont(root);
+    // Multiple passes: cleanup may expose new flatten opportunities
+    for (let i = 0; i < 3; i++) {
+      cleanupNodes(root);
+      phase3Flatten(root);
+    }
+    return root;
+  }
+
+  // Guard against double install
+  if (window.__figmaCaptureInterceptor) return;
+  window.__figmaCaptureInterceptor = true;
+
+  // --- Clipboard interceptor ---
+
+  function tryTransformJson(text) {
+    try {
+      const obj = JSON.parse(text);
+      const root = obj.root || obj;
+      if (root.nodeType === 1) {
+        transformPayload(root);
+        console.log('[figma-capture] clipboard payload transformed');
+        return JSON.stringify(obj);
+      }
+    } catch {}
+    return null;
+  }
+
+  const origWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
+  navigator.clipboard.writeText = async function(text) {
+    const transformed = tryTransformJson(text);
+    return origWriteText(transformed || text);
+  };
+
+  const H2D_PREFIX = '<!--(figh2d)';
+  const H2D_SUFFIX = '(/figh2d)-->';
+
+  function fixHtmlFonts(html) {
+    // Extract base64 JSON from data-h2d attribute
+    const match = html.match(/data-h2d="([^"]*)"/);
+    if (!match) return html;
+
+    let encoded = match[1];
+    // Strip comment markers
+    if (encoded.startsWith(H2D_PREFIX)) encoded = encoded.slice(H2D_PREFIX.length);
+    if (encoded.endsWith(H2D_SUFFIX)) encoded = encoded.slice(0, -H2D_SUFFIX.length);
+
+    try {
+      // Decode base64 → UTF-8
+      const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+      const json = new TextDecoder().decode(bytes);
+      const payload = JSON.parse(json);
+      const root = payload.root || payload;
+      if (root.nodeType === 1) {
+        transformPayload(root);
+        console.log('[figma-capture] clipboard h2d payload transformed');
+      }
+      // Encode back: UTF-8 → base64 (chunked to avoid stack overflow)
+      const outBytes = new TextEncoder().encode(JSON.stringify(payload));
+      let binary = '';
+      for (let i = 0; i < outBytes.length; i += 8192) {
+        binary += String.fromCharCode(...outBytes.subarray(i, i + 8192));
+      }
+      const newB64 = btoa(binary);
+      const newAttr = H2D_PREFIX + newB64 + H2D_SUFFIX;
+      return html.replace(match[1], newAttr);
+    } catch (e) {
+      console.warn('[figma-capture] clipboard h2d decode failed:', e);
+      return html;
+    }
+  }
+
+  const origWrite = navigator.clipboard.write.bind(navigator.clipboard);
+  navigator.clipboard.write = async function(items) {
+    const newItems = await Promise.all([...items].map(async (item) => {
+      const types = item.types || [];
+      if (types.includes('text/html')) {
+        try {
+          const blob = await item.getType('text/html');
+          const html = await blob.text();
+          const fixedHtml = fixHtmlFonts(html);
+          const data = {};
+          for (const t of types) {
+            data[t] = t === 'text/html'
+              ? new Blob([fixedHtml], { type: 'text/html' })
+              : await item.getType(t);
+          }
+          return new ClipboardItem(data);
+        } catch (e) {
+          console.warn('[figma-capture] clipboard html fix failed:', e);
+        }
+      }
+      return item;
+    }));
+    return origWrite(newItems);
+  };
+
+  console.log('[figma-capture] interceptor v3 installed');
 }
+

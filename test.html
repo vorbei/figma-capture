@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Figma Capture Font Test</title>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; padding: 40px; color: #1a1a1a; }
+  h1 { font-size: 28px; margin-bottom: 32px; }
+  .section { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 16px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
+  .row:last-child { border-bottom: none; }
+  .label { font-size: 12px; color: #999; width: 140px; flex-shrink: 0; }
+  .content { font-size: 16px; line-height: 1.6; }
+
+  /* Icon font */
+  .material-icons { font-family: 'Material Icons'; font-size: 24px; vertical-align: middle; }
+
+  /* Nested wrapper test */
+  .wrapper-test div { /* no visual styles on inner divs */ }
+
+  /* Custom font test */
+  .inter { font-family: "Inter", -apple-system, sans-serif; }
+  .georgia { font-family: Georgia, "Times New Roman", serif; }
+  .mono { font-family: "SF Mono", "Fira Code", monospace; }
+</style>
+</head>
+<body>
+
+<h1>字体捕获测试 Font Capture Test</h1>
+
+<!-- Phase 1: Mixed CJK + Latin -->
+<div class="section">
+  <h2>Phase 1 — Mixed CJK/Latin (should split)</h2>
+  <div class="row">
+    <span class="label">基础混排</span>
+    <span class="content">Hello 你好 World 世界</span>
+  </div>
+  <div class="row">
+    <span class="label">句子混排</span>
+    <span class="content">这是一个React组件，用于展示Dashboard数据</span>
+  </div>
+  <div class="row">
+    <span class="label">带数字</span>
+    <span class="content">第3季度收入增长了25%，达到了¥1,200万</span>
+  </div>
+  <div class="row">
+    <span class="label">Inter字体混排</span>
+    <span class="content inter">Design设计 / System系统 / Token令牌</span>
+  </div>
+  <div class="row">
+    <span class="label">Georgia衬线</span>
+    <span class="content georgia">Typography排版是设计的Core核心</span>
+  </div>
+</div>
+
+<!-- Phase 2: Pure CJK -->
+<div class="section">
+  <h2>Phase 2 — Pure CJK (should fix font, no split)</h2>
+  <div class="row">
+    <span class="label">纯中文</span>
+    <span class="content">这段文字应该使用苹方字体渲染</span>
+  </div>
+  <div class="row">
+    <span class="label">日文假名</span>
+    <span class="content">こんにちは世界、東京タワー</span>
+  </div>
+  <div class="row">
+    <span class="label">韩文</span>
+    <span class="content">안녕하세요 세계</span>
+  </div>
+  <div class="row">
+    <span class="label">中文标点</span>
+    <span class="content">你好！这是「测试」，包含：各种、标点。</span>
+  </div>
+</div>
+
+<!-- Icon font tests -->
+<div class="section">
+  <h2>Icons — Material Symbols</h2>
+  <div class="row">
+    <span class="label">图标+中文</span>
+    <div class="content">
+      <span class="material-icons">home</span> 首页
+      <span class="material-icons">search</span> 搜索
+      <span class="material-icons">settings</span> 设置
+      <span class="material-icons">favorite</span> 收藏
+    </div>
+  </div>
+  <div class="row">
+    <span class="label">图标+混排</span>
+    <div class="content">
+      <span class="material-icons">edit</span> Edit编辑
+      <span class="material-icons">delete</span> Delete删除
+      <span class="material-icons">share</span> Share分享
+    </div>
+  </div>
+  <div class="row">
+    <span class="label">纯图标</span>
+    <div class="content">
+      <span class="material-icons">check_circle</span>
+      <span class="material-icons">warning</span>
+      <span class="material-icons">error</span>
+      <span class="material-icons">info</span>
+    </div>
+  </div>
+  <div class="row">
+    <span class="label">大图标+说明</span>
+    <div class="content" style="display: flex; gap: 24px; align-items: center;">
+      <span class="material-icons" style="font-size: 48px;">rocket_launch</span>
+      <div>
+        <div style="font-weight: 600;">发射控制台</div>
+        <div style="color: #666; font-size: 14px;">Launch Control — 管理所有发射任务</div>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <span class="label">图标按钮</span>
+    <div class="content" style="display: flex; gap: 12px;">
+      <button style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: 1px solid #ddd; border-radius: 8px; background: #fff; font-family: inherit; font-size: 14px; cursor: pointer;">
+        <span class="material-icons" style="font-size: 18px;">add</span> 新建项目
+      </button>
+      <button style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: 1px solid #ddd; border-radius: 8px; background: #fff; font-family: inherit; font-size: 14px; cursor: pointer;">
+        <span class="material-icons" style="font-size: 18px;">download</span> 下载报告
+      </button>
+      <button style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: 1px solid #ddd; border-radius: 8px; background: #fff; font-family: inherit; font-size: 14px; cursor: pointer;">
+        <span class="material-icons" style="font-size: 18px;">share</span> Share分享
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Phase 3: Nested wrappers (should flatten) -->
+<div class="section">
+  <h2>Phase 3 — Nested Wrappers (should flatten)</h2>
+  <div class="row">
+    <span class="label">三层嵌套</span>
+    <div>
+      <div>
+        <div>
+          <span class="content">这段文字被三层空DIV包裹</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <span class="label">文本直接嵌套</span>
+    <div>
+      <span>
+        <span>纯文本在空SPAN里</span>
+      </span>
+    </div>
+  </div>
+  <div class="row">
+    <span class="label">有样式不扁平</span>
+    <div style="background-color: #e8f4fd; padding: 8px 12px; border-radius: 6px;">
+      这个DIV有背景色，不应被扁平化
+    </div>
+  </div>
+  <div class="row">
+    <span class="label">section/article</span>
+    <section>
+      <article>
+        <span class="content">语义标签也应该被扁平化</span>
+      </article>
+    </section>
+  </div>
+</div>
+
+<!-- Pure Latin (should NOT be modified) -->
+<div class="section">
+  <h2>Control — Pure Latin (should NOT change)</h2>
+  <div class="row">
+    <span class="label">English</span>
+    <span class="content">This text should keep its original font family unchanged.</span>
+  </div>
+  <div class="row">
+    <span class="label">Monospace</span>
+    <span class="content mono">const x = await fetch('/api/data');</span>
+  </div>
+</div>
+
+<!-- Emoji mix -->
+<div class="section">
+  <h2>Emoji + CJK</h2>
+  <div class="row">
+    <span class="label">表情混排</span>
+    <span class="content">🎉 恭喜你完成了任务 ✅</span>
+  </div>
+  <div class="row">
+    <span class="label">Emoji+Latin+CJK</span>
+    <span class="content">🚀 Launch发射 countdown倒计时 3, 2, 1!</span>
+  </div>
+</div>
+
+</body>
+</html>
