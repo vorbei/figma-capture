@@ -25,11 +25,12 @@ chrome.action.onClicked.addListener(async (tab) => {
       files: ['capture.js'],
       world: 'MAIN'
     });
-    // 3. 触发剪贴板捕获（不传 endpoint → 只复制不发送）
+    // 3. 直接显示选择工具栏（不先捕获）
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => {
-        window.figma.captureForDesign({ selector: 'body' });
+        const { showClipboardBar } = window.figma.__clipboardFlow('body');
+        showClipboardBar();
       },
       world: 'MAIN'
     });
