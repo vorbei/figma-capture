@@ -1,7 +1,22 @@
-// 点击图标 → 注入拦截器 + capture.js → 自动剪贴板捕获（不发送）
-chrome.action.onClicked.addListener(async (tab) => {
+// 点击图标或快捷键 → 注入拦截器 + capture.js → 显示选择工具栏
+async function captureTab(tab) {
   try {
-    // 0. 读取字体映射表并注入到页面
+    // 0a. patch attachShadow，保存 closed shadow root 引用（必须在 capture.js 之前）
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        if (window.__shadowPatch) return;
+        window.__shadowPatch = true;
+        const orig = Element.prototype.attachShadow;
+        Element.prototype.attachShadow = function(init) {
+          const sr = orig.call(this, init);
+          if (init.mode === 'closed') this.__sr = sr;
+          return sr;
+        };
+      },
+      world: 'MAIN'
+    });
+    // 0b. 读取字体映射表并注入到页面
     let fontMap = {};
     try {
       const resp = await fetch(chrome.runtime.getURL('font-map.json'));
@@ -25,7 +40,7 @@ chrome.action.onClicked.addListener(async (tab) => {
       files: ['capture.js'],
       world: 'MAIN'
     });
-    // 3. 直接显示选择工具栏（不先捕获）
+    // 3. 显示选择工具栏
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => {
@@ -34,8 +49,53 @@ chrome.action.onClicked.addListener(async (tab) => {
       },
       world: 'MAIN'
     });
+    // 4. 阻止工具栏影响宿主页面
+    //    window 捕获阶段拦截 → 用 shadowRoot.elementFromPoint 找到真实目标 → 重新分发
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        if (window.__figmaToolbarShield) return;
+        window.__figmaToolbarShield = true;
+        let cachedHost = null;
+        for (const type of ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup']) {
+          window.addEventListener(type, (e) => {
+            if (e._t) return;
+            if (!cachedHost || !cachedHost.isConnected)
+              cachedHost = document.getElementById('__figma_capture_toolbar_host__');
+            if (!cachedHost || !cachedHost.__sr) return;
+            const path = e.composedPath();
+            if (!path.includes(cachedHost)) return;
+            e.stopPropagation();
+            e.preventDefault();
+            const real = cachedHost.__sr.elementFromPoint(e.clientX, e.clientY);
+            if (!real) return;
+            const C = (e instanceof PointerEvent) ? PointerEvent : MouseEvent;
+            const re = new C(type, {
+              bubbles: true, composed: false, cancelable: true,
+              detail: e.detail,
+              screenX: e.screenX, screenY: e.screenY,
+              clientX: e.clientX, clientY: e.clientY,
+              button: e.button, buttons: e.buttons,
+              ctrlKey: e.ctrlKey, shiftKey: e.shiftKey,
+              altKey: e.altKey, metaKey: e.metaKey,
+            });
+            re._t = true;
+            real.dispatchEvent(re);
+          }, true);
+        }
+      },
+      world: 'MAIN'
+    });
   } catch (e) {
     console.warn('[figma-capture] inject failed:', e.message);
+  }
+}
+
+chrome.action.onClicked.addListener(captureTab);
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === 'capture') {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) captureTab(tab);
   }
 });
 

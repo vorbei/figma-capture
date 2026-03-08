@@ -11,6 +11,7 @@ This extension adds a **post-processing layer** on top of Figma's official `capt
 - **Default font fallback** — Assigns `Noto Sans SC` to elements without explicit `fontFamily`, preventing Figma's Times fallback
 - **DOM flattening** — Removes pass-through wrapper `<div>`/`<span>` elements that add noise without visual contribution
 - **Empty frame cleanup** — Strips zero-size childless elements and bubbles up removal of non-decorative empty containers
+- **Event isolation** — Prevents toolbar clicks from triggering host page behaviors (menu close, focus change) by intercepting events at the window capture phase and re-dispatching them inside the toolbar's shadow DOM
 
 ## Setup
 
@@ -28,17 +29,19 @@ This extension adds a **post-processing layer** on top of Figma's official `capt
 ## Usage
 
 1. Navigate to the page you want to capture
-2. Click the extension icon
-3. Switch to Figma and **Ctrl/Cmd+V** to paste
+2. Click the extension icon (or press **Alt+Shift+F**)
+3. Use the toolbar to capture the entire page or select a specific element
+4. Switch to Figma and **Ctrl/Cmd+V** to paste
 
 ## How it works
 
-1. `capture.js` (Figma's official script) serializes the DOM — computed styles, images, layout — into a JSON payload and writes it to the clipboard
-2. `background.js` installs a clipboard interceptor (`navigator.clipboard.write` / `writeText`) that transforms the payload before it's written:
+1. `background.js` patches `Element.prototype.attachShadow` to save closed shadow root references (needed for event isolation)
+2. `capture.js` (Figma's official script) serializes the DOM into a JSON payload and writes it to the clipboard
+3. A clipboard interceptor (`navigator.clipboard.write` / `writeText`) transforms the payload before it's written:
    - Font correction (CJK, icon fonts, font mapping)
    - Whitespace/empty node cleanup
    - Wrapper flattening (promotes single children of non-decorative same-size containers)
-3. The result is a cleaner, more accurate Figma paste
+4. An event shield intercepts clicks on the toolbar at the `window` capture phase, preventing host page side-effects (e.g. menus closing), then re-dispatches them inside the toolbar's closed shadow DOM via `shadowRoot.elementFromPoint`
 
 ## Disclaimer
 
